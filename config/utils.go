@@ -22,3 +22,16 @@ func ScopeJoin(scope []Scope) string{
 	}
 	return strings.Join(s,",")
 }
+
+func ScopeFilter(clientID string,scope string)(s []Scope){
+	cli := GetClient(clientID)
+	sl := strings.Split(scope,",")
+	for _,str := range sl{
+		for _,sc := range cli.Scope{
+			if str == sc.ID{
+				s = append(s,sc)
+			}
+		}
+	}
+	return
+}
