@@ -11,6 +11,7 @@ import (
 	"gopkg.in/oauth2.v3/models"
 	"gopkg.in/oauth2.v3/server"
 	"gopkg.in/oauth2.v3/store"
+	"html/template"
 	"log"
 	"net/http"
 	"net/url"
@@ -20,10 +21,16 @@ import (
 var srv *server.Server			// 授权服务
 var mgr *manage.Manager			// 授权管理
 
-func main(){
+type TplData struct {
+	Client config.Client
+	Scope []config.Scope
+	Error string
+}
+
+func main() {
 	time.Sleep(30 * time.Second)
 
-	config.Setup()		// 数据库连接初始化
+	config.Setup() // 数据库连接初始化
 
 	session.Setup()
 
@@ -31,9 +38,9 @@ func main(){
 	mgr.SetAuthorizeCodeTokenCfg(manage.DefaultAuthorizeCodeTokenCfg)
 	mgr.MustTokenStorage(store.NewMemoryTokenStore())
 
-	mgr.MapAccessGenerate(generates.NewJWTAccessGenerate([]byte("00000000"),jwt.SigningMethodHS512))
+	mgr.MapAccessGenerate(generates.NewJWTAccessGenerate([]byte("00000000"), jwt.SigningMethodHS512))
 	clientStore := store.NewClientStore()
-	for _,v := range config.Get().OAuth2.Client{		// 获取client配置
+	for _, v := range config.Get().OAuth2.Client { // 获取client配置
 		clientStore.Set(v.ID, &models.Client{
 			ID:     v.ID,
 			Secret: v.Secret,
@@ -43,7 +50,7 @@ func main(){
 	mgr.MapClientStorage(clientStore)
 
 	// 设置oauth2服务
-	srv = server.NewServer(server.NewConfig(),mgr)
+	srv = server.NewServer(server.NewConfig(), mgr)
 	srv.SetPasswordAuthorizationHandler(passwordAuthorizationHandler)
 	srv.SetUserAuthorizationHandler(userAuthorizeHandler)
 	srv.SetAuthorizeScopeHandler(authorizeScopeHandler)
@@ -51,7 +58,8 @@ func main(){
 	srv.SetResponseErrorHandler(responseErrorHandler)
 
 	// 设置http服务
-	http.HandleFunc("/authorize",authorizeHandler)
+	http.HandleFunc("/authorize", authorizeHandler)
+	http.HandleFunc("/login",loginHandler)
 }
 
 /*
@@ -125,4 +133,85 @@ func authorizeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	r.Form = form
+
+	err := session.Delete(w,r,"RequestForm")
+
+	if err != nil{
+		http.Error(w,err.Error(),http.StatusInternalServerError)
+		return
+	}
+	err = srv.HandleAuthorizeRequest(w,r)
+	if err != nil{
+		http.Error(w,err.Error(),http.StatusBadRequest)
+	}
+}
+
+/*
+登录处理
+*/
+func loginHandler(w http.ResponseWriter, r *http.Request){
+	form,err := session.Get(r,"RequestForm")
+	if err != nil{
+		http.Error(w,err.Error(),http.StatusInternalServerError)
+		return
+	}
+	if form == nil{
+		http.Error(w,"Invalid Request",http.StatusBadRequest)
+		return
+	}
+	clientID := form.(url.Values).Get("client_id")
+	scope := form.(url.Values).Get("scope")
+
+	data := TplData{
+		Client: config.GetClient(clientID),
+		Scope: config.ScopeFilter(clientID,scope),
+	}
+
+	if data.Scope == nil{
+		http.Error(w,"Invalid Scope",http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == "POST"{
+		err = r.ParseForm()
+		if r.Form == nil{
+			if err != nil{
+				http.Error(w,err.Error(),http.StatusInternalServerError)
+				return
+			}
+		}
+
+		var userID string
+
+		if r.Form.Get("type") == "password"{
+			var user model.User
+			userID = user.GetUserIDByPwd(r.Form.Get("username"),r.Form.Get("password"))
+			if userID == ""{
+				t,err := template.ParseFiles("tpl/login.html")
+				if err != nil{
+					http.Error(w,err.Error(),http.StatusInternalServerError)
+					return
+				}
+				data.Error = "用户名或密码错误"
+				t.Execute(w,data)
+
+				return
+			}
+		}
+
+		err = session.Set(w,r,"LoggedInUserID",userID)
+		if err != nil{
+			http.Error(w,err.Error(),http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Location","authorize")
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+	t,err := template.ParseFiles("tpl/login.html")
+	if err != nil{
+		http.Error(w,err.Error(),http.StatusInternalServerError)
+		return
+	}
+	t.Execute(w,data)
 }
