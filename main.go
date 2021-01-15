@@ -13,6 +13,7 @@ import (
 	"gopkg.in/oauth2.v3/store"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -41,11 +42,16 @@ func main(){
 	}
 	mgr.MapClientStorage(clientStore)
 
+	// 设置oauth2服务
 	srv = server.NewServer(server.NewConfig(),mgr)
 	srv.SetPasswordAuthorizationHandler(passwordAuthorizationHandler)
 	srv.SetUserAuthorizationHandler(userAuthorizeHandler)
 	srv.SetAuthorizeScopeHandler(authorizeScopeHandler)
 	srv.SetInternalErrorHandler(internalErrorHandler)
+	srv.SetResponseErrorHandler(responseErrorHandler)
+
+	// 设置http服务
+	http.HandleFunc("/authorize",authorizeHandler)
 }
 
 /*
@@ -97,4 +103,26 @@ func authorizeScopeHandler(w http.ResponseWriter, r *http.Request)(scope string,
 func internalErrorHandler(err error)(re *errors.Response){
 	log.Println("Internal Error:",err.Error())
 	return
+}
+
+/*
+响应错误处理程序
+*/
+func responseErrorHandler(re *errors.Response){
+	log.Println("ResponseError:",re.Error.Error())
+}
+
+/*
+授权程序
+*/
+func authorizeHandler(w http.ResponseWriter, r *http.Request) {
+	var form url.Values
+	v,_ := session.Get(r,"RequestForm")
+	if v != nil{
+		r.ParseForm()
+		if r.Form.Get("client_id") == ""{
+			form = v.(url.Values)
+		}
+	}
+	r.Form = form
 }
