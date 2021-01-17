@@ -4,6 +4,7 @@ import (
 	"com.sso.zenith/config"
 	"com.sso.zenith/model"
 	"com.sso.zenith/pkg/session"
+	"encoding/json"
 	"github.com/dgrijalva/jwt-go"
 	"gopkg.in/oauth2.v3/errors"
 	"gopkg.in/oauth2.v3/generates"
@@ -60,6 +61,13 @@ func main() {
 	// 设置http服务
 	http.HandleFunc("/authorize", authorizeHandler)
 	http.HandleFunc("/login",loginHandler)
+	http.HandleFunc("/logout",logoutHandler)
+	http.HandleFunc("/token",tokenHandler)
+	http.HandleFunc("/test",testHandler)
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
+
+	log.Println("Server is running at 9096 port.")
+	log.Fatal(http.ListenAndServe(":9096", nil))
 }
 
 /*
@@ -214,4 +222,56 @@ func loginHandler(w http.ResponseWriter, r *http.Request){
 		return
 	}
 	t.Execute(w,data)
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request){
+	if r.Form == nil{
+		err := r.ParseForm();
+		if err != nil{
+			http.Error(w,err.Error(),http.StatusInternalServerError)
+			return
+		}
+	}
+	redirectURI := r.Form.Get("redirect_uri")
+	_,err := url.Parse(redirectURI)
+	if err != nil {
+		http.Error(w,err.Error(),http.StatusBadRequest)
+	}
+	err = session.Delete(w,r,"LoggedinUserID")
+	if err != nil{			// ID没有登录
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Location",redirectURI)
+	w.WriteHeader(http.StatusFound)
+}
+
+func tokenHandler(w http.ResponseWriter, r *http.Request){
+	err := srv.HandleTokenRequest(w,r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func testHandler(w http.ResponseWriter, r *http.Request){
+	token,err := srv.ValidationBearerToken(r)
+	if err != nil{
+		http.Error(w,err.Error(),http.StatusBadRequest)
+		return
+	}
+	cli,err := mgr.GetClient(token.GetClientID())
+	if err != nil{
+		http.Error(w,err.Error(),http.StatusBadRequest)
+		return
+	}
+	data := map[string]interface{}{
+		"expires_in": int64(token.GetAccessCreateAt().Add(token.GetAccessExpiresIn()).Sub(time.Now()).Seconds()),
+		"user_id": token.GetUserID(),
+		"client_id": token.GetClientID(),
+		"scope": token.GetScope(),
+		"domain": cli.GetDomain(),
+	}
+	e := json.NewEncoder(w)
+	e.SetIndent("","  ")
+	e.Encode(data)
 }
